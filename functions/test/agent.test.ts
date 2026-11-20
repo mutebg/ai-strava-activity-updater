@@ -1,7 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { genkit } from "genkit";
 import { StravaClient } from "../src/strava";
-import { analyzeAndUpdateActivity, type GenerateTurnFn } from "../src/agent";
+import { analyzeAndUpdateActivity } from "../src/agent";
 
 test("StravaClient refreshes token once and fetches activity + zones", async () => {
   const calls: Array<{ url: string; method: string }> = [];
@@ -111,35 +112,59 @@ test("analyzeAndUpdateActivity runs tool loop and respects dryRun", async () => 
     },
   };
 
+  const ai = genkit();
   let turn = 0;
-  const mockGenerateTurn: GenerateTurnFn = async () => {
-    turn++;
-    if (turn === 1) {
-      return {
-        functionCalls: [
-          { name: "getStravaActivity", args: { stravaId: "999" } },
-          { name: "getAthleteGear", args: {} },
-        ],
-      };
-    }
-    if (turn === 2) {
-      return {
-        functionCalls: [
-          {
-            name: "updateStravaActivity",
-            args: { stravaId: "999", name: "Long run", gear_id: "g-asics" },
+  ai.defineModel(
+    {
+      name: "mock-gemini",
+      supports: { tools: true, multiturn: true, systemRole: true },
+    },
+    async () => {
+      turn++;
+      if (turn === 1) {
+        return {
+          message: {
+            role: "model",
+            content: [
+              { toolRequest: { name: "getStravaActivity", input: { stravaId: "999" } } },
+              { toolRequest: { name: "getAthleteGear", input: {} } },
+            ],
           },
-        ],
+          finishReason: "stop",
+        };
+      }
+      if (turn === 2) {
+        return {
+          message: {
+            role: "model",
+            content: [
+              {
+                toolRequest: {
+                  name: "updateStravaActivity",
+                  input: { stravaId: "999", name: "Long run", gear_id: "g-asics" },
+                },
+              },
+            ],
+          },
+          finishReason: "stop",
+        };
+      }
+      return {
+        message: {
+          role: "model",
+          content: [{ text: "Classified as Long run (> 18 km) and proposed Asics Megablast." }],
+        },
+        finishReason: "stop",
       };
-    }
-    return { text: "Classified as Long run (> 18 km) and proposed Asics Megablast." };
-  };
+    },
+  );
 
   const dryResult = await analyzeAndUpdateActivity({
     stravaId: "999",
     dryRun: true,
     stravaClient: mockStrava,
-    generateTurn: mockGenerateTurn,
+    ai,
+    model: "mock-gemini",
   });
 
   assert.equal(updateCalled, false);
